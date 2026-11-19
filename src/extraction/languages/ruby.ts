@@ -51,8 +51,11 @@ function rubyExpressionMethodCall(node: SyntaxNode): boolean {
     ? parent.childForFieldName('value')
     : parent.type === 'assignment' || parent.type === 'operator_assignment' ? parent.childForFieldName('right')
     : null;
+  const modifier = parent.type === 'if_modifier' || parent.type === 'unless_modifier';
+  const inModifier = modifier && (parent.childForFieldName('condition')?.startIndex === node.startIndex ||
+    parent.childForFieldName('body')?.startIndex === node.startIndex);
   if (parent.type !== 'binary' && parent.type !== 'argument_list' && parent.type !== 'return' &&
-      value?.startIndex !== node.startIndex) return false;
+      value?.startIndex !== node.startIndex && !inModifier) return false;
   let scope = parent.parent;
   while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
   return !!scope && !rubyHasLocalBinding(scope, node);

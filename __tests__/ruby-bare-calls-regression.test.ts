@@ -102,6 +102,16 @@ beforeAll(async () => {
 
   def shadowed_default(subtotal, value: subtotal)
   end
+
+  def modifier_conditions(flag)
+    consume(1) if subtotal
+    consume(2) unless subtotal
+    subtotal if flag
+  end
+
+  def local_modifier_condition(subtotal)
+    consume(1) if subtotal
+  end
 end
 
 class Unrelated
@@ -134,6 +144,9 @@ describe('Ruby bare method calls', () => {
       'Item::default_value -> Item::subtotal',
       'Item::explicit_default -> Item::subtotal',
       'Item::keyword_default -> Item::subtotal',
+      'Item::modifier_conditions -> Item::subtotal',
+      'Item::modifier_conditions -> Item::subtotal',
+      'Item::modifier_conditions -> Item::subtotal',
       'Item::returned -> Item::subtotal',
       'Item::standalone_call -> Item::subtotal',
       'Item::tax -> Item::subtotal',
