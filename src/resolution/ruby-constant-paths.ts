@@ -177,11 +177,11 @@ export function ivarClass(name: string, ref: UnresolvedRef, context: ResolutionC
   const key = `${owner.qualifiedName}\0${name}`;
   if (!memo.has(key)) memo.set(key, ivarClassFromInitialize(name, owner.qualifiedName, context));
   const initialized = memo.get(key);
-  return railsAssociationBuildClass(name, ref, caller, owner, context)
+  return railsActionAssignmentClass(name, ref, caller, owner, context)
     ?? (initialized === undefined ? railsCallbackClass(name, caller, owner, context) : initialized);
 }
 
-function railsAssociationBuildClass(name: string, ref: UnresolvedRef, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
+function railsActionAssignmentClass(name: string, ref: UnresolvedRef, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
   if (caller.filePath !== owner.filePath || !/(?:^|\/)app\/controllers\/.*_controller\.rb$/.test(owner.filePath)) return;
   const lines = context.getFileLines?.(caller.filePath) ?? context.readFile(caller.filePath)?.split(/\r?\n/);
   if (!lines) return;
@@ -197,8 +197,17 @@ function railsAssociationBuildClass(name: string, ref: UnresolvedRef, caller: No
   if (assignments.length !== 1) return;
   const index = assignments[0]!;
   if (caller.startLine + index + 1 >= ref.line) return;
+  const statement = body[index]!.startsWith(indent) ? body[index]!.slice(indent.length) : '';
+  // An initial constructor assignment dominates later uses in this action.
+  if (body.slice(0, index).every((line) => !line.trim())) {
+    const constructor = new RegExp(String.raw`^@${name} = (::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.new(?:\([^()]*\))?$`).exec(statement);
+    if (constructor) {
+      const classes = constantsNamed(constructor[2]!, !!constructor[1], { ...ref, line: caller.startLine + index + 1 }, context);
+      return classes.length === 1 && classes[0]!.kind === 'class' ? classes[0] : undefined;
+    }
+  }
   const built = new RegExp(String.raw`^@${name} = ([a-z_]\w*)\.([a-z_]\w*)\.build\(`)
-    .exec(body[index]!.startsWith(indent) ? body[index]!.slice(indent.length) : '');
+    .exec(statement);
   if (!built) return;
   const binding = writes(built[1]!);
   if (binding.length !== 1 || binding[0]! >= index) return;

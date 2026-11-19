@@ -297,4 +297,9 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     const graph = await index(backend);
     expect(callsAt(graph, 'app/controllers/scoped_records_controller.rb', 6)).toEqual(['Record::publish!:4']);
   });
+
+  it.skipIf(skip)('links a call after an initial controller constructor assignment', async () => {
+    const graph = await index(backend);
+    expect(callsAt(graph, 'app/controllers/scoped_records_controller.rb', 12)).toEqual(['Record::publish!:4']);
+  });
 });
