@@ -178,7 +178,72 @@ export function ivarClass(name: string, ref: UnresolvedRef, context: ResolutionC
   if (!memo.has(key)) memo.set(key, ivarClassFromInitialize(name, owner.qualifiedName, context));
   const initialized = memo.get(key);
   return railsActionAssignmentClass(name, ref, caller, owner, context)
-    ?? (initialized === undefined ? railsCallbackClass(name, caller, owner, context) : initialized);
+    ?? (initialized === undefined
+      ? railsCallbackClass(name, caller, owner, context) ?? railsPrivateHelperClass(name, ref, caller, owner, context)
+      : initialized);
+}
+
+/** Follow a private helper only when every local entry supplies the same record type. */
+function railsPrivateHelperClass(name: string, ref: UnresolvedRef, helper: Node, owner: Node, context: ResolutionContext): Node | undefined {
+  if (helper.filePath !== owner.filePath || !/(?:^|\/)app\/controllers\/.*_controller\.rb$/.test(owner.filePath)) return;
+  if (!/^[a-z_]\w*$/.test(helper.name) || ref.line !== helper.startLine + 1) return;
+  const raw = context.getFileLines?.(owner.filePath) ?? context.readFile(owner.filePath)?.split(/\r?\n/);
+  if (!raw) return;
+  const lines = stripCommentsForRegex(raw.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby').split('\n');
+  const at = (line: number) => lines[line - owner.startLine] ?? '';
+  const header = new RegExp(`^([ \\t]+)def ${helper.name}$`).exec(at(helper.startLine));
+  if (!header) return;
+  const indent = header[1]!;
+  const visibility = new RegExp(`^${indent}(private|public|protected)[ \\t]*$`);
+  if (lines.slice(0, helper.startLine - owner.startLine).filter((line) => visibility.test(line)).at(-1)?.trim() !== 'private') return;
+  const methods = context.getNodesInFile(owner.filePath).filter((node) =>
+    node.kind === 'method' && node.qualifiedName === `${owner.qualifiedName}::${node.name}`);
+  const uses = new RegExp(`\\b${helper.name}\\b`);
+  const write = new RegExp(String.raw`@${name}\s*(?:(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=|(?:,\s*\*?[@$\w]+)+\s*=)(?![=~>])`);
+  const writers = methods.filter((method) =>
+    lines.slice(method.startLine - owner.startLine + 1, method.endLine - owner.startLine).some((line) => write.test(line)));
+  if (writers.some((method) => method.id === helper.id)) return;
+  const mentionsWriter = (text: string) => writers.some(({ name: writer }) =>
+    text.includes(writer) && new RegExp(String.raw`(?<![\w.])${writer.replace(/[!?]$/, '\\$&')}(?!\w)`).test(text));
+  let result: Node | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const line = owner.startLine + index;
+    const text = lines[index]!;
+    if (line === helper.startLine || !uses.test(text)) continue;
+    if (text.trim() !== `unless ${helper.name}` || !text.startsWith(`${indent}  unless`)) return;
+    const caller = methods.find((method) => method.startLine < line && method.endLine > line);
+    if (!caller || caller.isStatic || at(caller.startLine) !== `${indent}def ${caller.name}`) return;
+    const prefix = lines.slice(caller.startLine - owner.startLine + 1, index).filter((row) => row.trim());
+    // Only flat assignments before the helper; no branches or explicit calls to local writers.
+    if (prefix.some((row) => !new RegExp(`^${indent}  @\\w+ = `).test(row) || mentionsWriter(row))) return;
+    const writes = prefix.filter((row) => write.test(row));
+    let candidate: Node | undefined;
+    if (writes.length === 1 && writes[0] === prefix[0]) {
+      const relation = new RegExp(`^${indent}  @${name} = ([a-z_]\\w*)\\.new$`).exec(writes[0]!);
+      if (relation) candidate = railsLocalRelationClass(relation[1]!, ref, owner, context, raw);
+    } else if (!writes.length) {
+      candidate = railsCallbackClass(name, caller, owner, context, writers, mentionsWriter);
+    }
+    if (!candidate || (result && result.id !== candidate.id)) return;
+    result = candidate;
+  }
+  return result;
+}
+
+function railsLocalRelationClass(method: string, ref: UnresolvedRef, owner: Node, context: ResolutionContext, lines: string[]): Node | undefined {
+  const helpers = context.getNodesByQualifiedName(`${owner.qualifiedName}::${method}`)
+    .filter((node) => node.kind === 'method' && !node.isStatic && node.filePath === owner.filePath);
+  if (helpers.length !== 1) return;
+  const helper = helpers[0]!;
+  if (helper.endLine !== helper.startLine + 2 ||
+      !new RegExp(`^\\s*def ${method}(?:\\(\\))?\\s*$`).test(lines[helper.startLine - 1] ?? '')) return;
+  const match = /^\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$/.exec(lines[helper.startLine] ?? '');
+  if (!match) return;
+  const classes = constantsNamed(match[2]!, !!match[1], { ...ref, line: helper.startLine + 1 }, context);
+  const model = classes.length === 1 ? classes[0] : undefined;
+  if (model?.kind !== 'class') return;
+  const ancestry = rubyAncestry(model.qualifiedName, context, true, owner.filePath);
+  return ancestry.has('ApplicationRecord') || ancestry.has('ActiveRecord::Base') ? model : undefined;
 }
 
 function railsActionAssignmentClass(name: string, ref: UnresolvedRef, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
@@ -243,7 +308,8 @@ function railsActionAssignmentClass(name: string, ref: UnresolvedRef, caller: No
 }
 
 /** A local controller callback assigning one record via Model(.where(...)).find(params[:key]). */
-function railsCallbackClass(name: string, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
+function railsCallbackClass(name: string, caller: Node, owner: Node, context: ResolutionContext,
+  writers?: Node[], mentionsWriter?: (text: string) => boolean): Node | undefined {
   if (caller.filePath !== owner.filePath || !/(?:^|\/)app\/controllers\/.*_controller\.rb$/.test(owner.filePath)) return;
   const lines = context.getFileLines?.(owner.filePath) ?? context.readFile(owner.filePath)?.split(/\r?\n/);
   if (!lines) return;
@@ -275,6 +341,10 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const callbacks = applicable.map(methods);
   if (callbacks.some((matches) => matches.length !== 1)) return;
   const ordered = callbacks.flat();
+  if (writers && ordered.some((method) => {
+    const text = lines.slice(method.startLine, method.endLine - 1).join('\n');
+    return !!mentionsWriter?.(text);
+  })) return;
   const soleWrite = (variable: string, ignored: Node[]) => {
     const writes = new RegExp(String.raw`(?<![@\w])@${variable}\s*(?:(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=|(?:,\s*\*?[@$\w]+)+\s*=)(?![=~>])`);
     const locations = body.split('\n').flatMap((text, index) => writes.test(text) ? [owner.startLine + index] : [])
@@ -294,7 +364,9 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const excludedActions = actionCandidates.some(({ name: action }) =>
     new RegExp(`(?:\\bself\\.|(?<![.\\w]))${action}\\b(?![ \\t]*:)`).test(outsideActions))
     ? [] : actionCandidates;
-  const write = soleWrite(name, excludedActions);
+  const write = soleWrite(name, writers
+    ? writers.filter((method) => method.id !== caller.id && !ordered.some((callback) => callback.id === method.id))
+    : excludedActions);
   const callbackIndex = ordered.findIndex((method) => method.endLine === method.startLine + 2 && method.startLine + 1 === write);
   if (callbackIndex < 0) return;
   const callback = ordered[callbackIndex]!;

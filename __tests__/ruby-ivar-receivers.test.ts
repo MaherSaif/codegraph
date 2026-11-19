@@ -215,6 +215,46 @@ end
 end
 `,
   ])),
+  ...Object.fromEntries(['Shared', 'Conflicting', 'Reassigned'].map((variant) => [
+    `app/controllers/${variant.toLowerCase()}_records_controller.rb`,
+    `class ${variant}RecordsController < ApplicationController
+  before_action :load_record, only: %w[update]
+
+  def create
+    @record = records.new
+    unless persist_record
+      render :new
+    end
+  end
+
+  def update
+${variant === 'Reassigned' ? '    @record = params[:record]' : ''}
+    unless persist_record
+      render :edit
+    end
+  end
+
+  private
+
+  def persist_record
+    @record.publish!
+  end
+
+  def load_record
+    @record = ${variant === 'Conflicting' ? 'OtherRecord' : 'records'}.find params[:id]
+  end
+
+  def records
+    Record.where(active: true)
+  end
+end
+`,
+  ])),
+  'app/models/other_record.rb': `class OtherRecord < ApplicationRecord
+  def publish!
+  end
+end
+`,
 };
 
 let root = '';
@@ -324,5 +364,12 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
   it.skipIf(skip)('links a call after an initial controller constructor assignment', async () => {
     const graph = await index(backend);
     expect(callsAt(graph, 'app/controllers/scoped_records_controller.rb', 12)).toEqual(['Record::publish!:4']);
+  });
+
+  it.skipIf(skip)('types a private helper only when its action inputs agree', async () => {
+    const graph = await index(backend);
+    expect(callsAt(graph, 'app/controllers/shared_records_controller.rb', 21)).toEqual(['Record::publish!:4']);
+    expect(callsAt(graph, 'app/controllers/conflicting_records_controller.rb', 21)).toEqual([]);
+    expect(callsAt(graph, 'app/controllers/reassigned_records_controller.rb', 21)).toEqual([]);
   });
 });
