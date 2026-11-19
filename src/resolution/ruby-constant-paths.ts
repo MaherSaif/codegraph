@@ -177,7 +177,60 @@ export function ivarClass(name: string, ref: UnresolvedRef, context: ResolutionC
   const key = `${owner.qualifiedName}\0${name}`;
   if (!memo.has(key)) memo.set(key, ivarClassFromInitialize(name, owner.qualifiedName, context));
   const initialized = memo.get(key);
-  return initialized === undefined ? railsCallbackClass(name, caller, owner, context) : initialized;
+  return railsAssociationBuildClass(name, ref, caller, owner, context)
+    ?? (initialized === undefined ? railsCallbackClass(name, caller, owner, context) : initialized);
+}
+
+function railsAssociationBuildClass(name: string, ref: UnresolvedRef, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
+  if (caller.filePath !== owner.filePath || !/(?:^|\/)app\/controllers\/.*_controller\.rb$/.test(owner.filePath)) return;
+  const lines = context.getFileLines?.(caller.filePath) ?? context.readFile(caller.filePath)?.split(/\r?\n/);
+  if (!lines) return;
+  const header = /^([ \t]*)def [\w!?]+[ \t]*$/.exec(lines[caller.startLine - 1] ?? '');
+  if (!header) return;
+  const indent = `${header[1]}  `;
+  const body = stripCommentsForRegex(lines.slice(caller.startLine, caller.endLine - 1).join('\n'), 'ruby').split('\n');
+  const writes = (variable: string) => {
+    const pattern = new RegExp(String.raw`(?<![@.\w])${variable}\s*(?:,|(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=(?![=~>]))`);
+    return body.flatMap((text, index) => pattern.test(text) ? [index] : []);
+  };
+  const assignments = writes(`@${name}`);
+  if (assignments.length !== 1) return;
+  const index = assignments[0]!;
+  if (caller.startLine + index + 1 >= ref.line) return;
+  const built = new RegExp(String.raw`^@${name} = ([a-z_]\w*)\.([a-z_]\w*)\.build\(`)
+    .exec(body[index]!.startsWith(indent) ? body[index]!.slice(indent.length) : '');
+  if (!built) return;
+  const binding = writes(built[1]!);
+  if (binding.length !== 1 || binding[0]! >= index) return;
+  const lookupLine = body[binding[0]!]!;
+  const lookup = new RegExp(String.raw`^${built[1]} = ([a-z_]\w*)\.find\((?:params\[:\w+\]|\w+\.\w+\(:\w+\))\)$`)
+    .exec(lookupLine.startsWith(indent) ? lookupLine.slice(indent.length) : '');
+  if (!lookup || writes(lookup[1]!).length) return;
+  const helpers = context.getNodesByQualifiedName(`${owner.qualifiedName}::${lookup[1]}`)
+    .filter((n) => n.kind === 'method' && n.isStatic !== true && n.filePath === caller.filePath);
+  if (helpers.length !== 1) return;
+  const helper = helpers[0]!;
+  if (helper.endLine !== helper.startLine + 2) return;
+  const relation = /^\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\([^()]*\)\s*$/.exec(lines[helper.startLine] ?? '');
+  if (!relation) return;
+  const models = constantsNamed(relation[2]!, !!relation[1], { ...ref, line: helper.startLine + 1 }, context);
+  if (models.length !== 1 || models[0]!.kind !== 'class') return;
+  const model = models[0]!;
+  const ancestry = rubyAncestry(model.qualifiedName, context, true, caller.filePath);
+  if (!ancestry.has('ApplicationRecord') && !ancestry.has('ActiveRecord::Base')) return;
+  const modelLines = context.getFileLines?.(model.filePath) ?? context.readFile(model.filePath)?.split(/\r?\n/);
+  if (!modelLines) return;
+  const declaration = stripCommentsForRegex(modelLines.slice(model.startLine, model.endLine - 1).join('\n'), 'ruby');
+  const associations = [...declaration.matchAll(new RegExp(String.raw`^[ \t]*(?:has_many|has_one|belongs_to|has_and_belongs_to_many) :${built[2]}\b[^\n]*`, 'gm'))];
+  if (associations.length !== 1) return;
+  const association = associations[0]![0];
+  if (!/^\s*has_many\b/.test(association) || /\b(?:through|as|polymorphic):/.test(association)) return;
+  const target = /\bclass_name: (['"])(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\1/.exec(association);
+  if (!target) return;
+  const targets = constantsNamed(target[2]!, target[0].includes(`${target[1]}::`), {
+    ...ref, filePath: model.filePath, line: model.startLine + 1,
+  }, context);
+  return targets.length === 1 && targets[0]!.kind === 'class' ? targets[0] : undefined;
 }
 
 /** A local controller callback assigning one record via Model(.where(...)).find(params[:key]). */

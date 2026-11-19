@@ -129,6 +129,31 @@ end
   end
 end
 `,
+  'app/models/member.rb': `class Member < ApplicationRecord
+  has_many :drafts, class_name: 'Record'
+end
+`,
+  'app/controllers/drafts_controller.rb': `class DraftsController < ApplicationController
+  def create
+    member = members.find(params[:id])
+    @draft = member.drafts.build(
+      title: params[:title]
+    )
+    @draft.publish!
+  end
+
+  def replace
+    member = members.find(params[:id])
+    member = current_user
+    @draft = member.drafts.build(title: params[:title])
+    @draft.publish!
+  end
+
+  def members
+    Member.where(active: true)
+  end
+end
+`,
 };
 
 let root = '';
@@ -210,5 +235,12 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     expect(callsAt(graph, controller, 5)).toEqual(['Record::publish!:4']);
     expect(callsAt(graph, controller, 10)).toEqual([]);
     expect(callsAt(graph, 'app/controllers/other_records_controller.rb', 6)).toEqual([]);
+  });
+
+  it.skipIf(skip)('types an association build only from an unambiguous local lookup', async () => {
+    const graph = await index(backend);
+    const controller = 'app/controllers/drafts_controller.rb';
+    expect(callsAt(graph, controller, 7)).toEqual(['Record::publish!:4']);
+    expect(callsAt(graph, controller, 14)).toEqual([]);
   });
 });
