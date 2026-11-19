@@ -131,6 +131,11 @@ export const rubyExtractor: LanguageExtractor = {
       'rescue', 'ensure', 'when',
     ]);
     if (!BLOCK_PARENTS.has(parent.type) && !rubyExpressionMethodCall(node)) return undefined;
+    if (BLOCK_PARENTS.has(parent.type)) {
+      let scope = parent.parent;
+      while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
+      if (scope && rubyHasLocalBinding(scope, node.text)) return undefined;
+    }
 
     const name = node.text;
 

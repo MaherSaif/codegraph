@@ -45,6 +45,19 @@ beforeAll(async () => {
     result = subtotal
   end
 
+  def standalone_call
+    subtotal
+  end
+
+  def standalone_parameter(subtotal)
+    subtotal
+  end
+
+  def standalone_local
+    subtotal = 4
+    subtotal
+  end
+
   def with_parameter(subtotal)
     subtotal + 1
   end
@@ -79,6 +92,7 @@ describe('Ruby bare method calls', () => {
     expect(calls.sort()).toEqual([
       'Item::assign_attribute -> Item::subtotal',
       'Item::assign_local -> Item::subtotal',
+      'Item::standalone_call -> Item::subtotal',
       'Item::tax -> Item::subtotal',
       'Item::total -> Item::subtotal',
       'Item::total -> Item::tax',
