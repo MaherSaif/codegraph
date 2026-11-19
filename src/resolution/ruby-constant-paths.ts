@@ -191,7 +191,7 @@ function railsPrivateHelperClass(name: string, ref: UnresolvedRef, helper: Node,
   if (!raw) return;
   const lines = stripCommentsForRegex(raw.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby').split('\n');
   const at = (line: number) => lines[line - owner.startLine] ?? '';
-  const header = new RegExp(`^([ \\t]+)def ${helper.name}$`).exec(at(helper.startLine));
+  const header = new RegExp(`^([ \\t]+)def ${helper.name}(?:\\([a-z_]\\w*\\))?$`).exec(at(helper.startLine));
   if (!header) return;
   const indent = header[1]!;
   const visibility = new RegExp(`^${indent}(private|public|protected)[ \\t]*$`);
@@ -210,7 +210,8 @@ function railsPrivateHelperClass(name: string, ref: UnresolvedRef, helper: Node,
     const line = owner.startLine + index;
     const text = lines[index]!;
     if (line === helper.startLine || !uses.test(text)) continue;
-    if (text.trim() !== `unless ${helper.name}` || !text.startsWith(`${indent}  unless`)) return;
+    const entry = new RegExp(`^${indent}  (?:unless ${helper.name}|${helper.name}\\(:[a-z_]\\w*\\))[ \\t]*$`);
+    if (!entry.test(text)) return;
     const caller = methods.find((method) => method.startLine < line && method.endLine > line);
     if (!caller || caller.isStatic || at(caller.startLine) !== `${indent}def ${caller.name}`) return;
     const prefix = lines.slice(caller.startLine - owner.startLine + 1, index).filter((row) => row.trim());
@@ -371,27 +372,28 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   if (callbackIndex < 0) return;
   const callback = ordered[callbackIndex]!;
   if (conditional.has(callback.name)) return;
-  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*)|([a-z_]\w*))\.find(?:\(params\[:\w+\]\)|[ \t]+params\[:\w+\])\s*$`)
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\)|\.([a-z_]\w*))?|@([a-z_]\w*)|([a-z_]\w*))\.find(?:\(params\[:\w+\]\)|[ \t]+params\[:\w+\])\s*$`)
     .exec(lines[callback.startLine] ?? '');
   if (!assignment) return;
-  let path = assignment[2], absolute = !!assignment[1], source = callback;
-  if (assignment[3]) {
-    const relationWrite = soleWrite(assignment[3], excludedActions);
+  const [, root, modelPath, scope, relationName, helperName] = assignment;
+  let path = modelPath, absolute = !!root, source = callback;
+  if (relationName) {
+    const relationWrite = soleWrite(relationName, excludedActions);
     const relation = ordered.slice(0, callbackIndex).find((method) =>
       method.endLine === method.startLine + 2 && method.startLine + 1 === relationWrite);
     if (!relation || conditional.has(relation.name)) return;
-    const match = new RegExp(String.raw`^\s*@${assignment[3]}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$`)
+    const match = new RegExp(String.raw`^\s*@${relationName}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$`)
       .exec(lines[relation.startLine] ?? '');
     if (!match) return;
     [, , path] = match;
     absolute = !!match[1];
     source = relation;
-  } else if (assignment[4]) {
-    const helpers = methods(assignment[4]);
+  } else if (helperName) {
+    const helpers = methods(helperName);
     if (helpers.length !== 1) return;
     const helper = helpers[0]!;
     if (helper.endLine !== helper.startLine + 2 ||
-        !new RegExp(`^\\s*def ${assignment[4]}(?:\\(\\))?\\s*$`).test(lines[helper.startLine - 1] ?? '')) return;
+        !new RegExp(`^\\s*def ${helperName}(?:\\(\\))?\\s*$`).test(lines[helper.startLine - 1] ?? '')) return;
     const match = /^\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$/
       .exec(lines[helper.startLine] ?? '');
     if (!match) return;
@@ -406,6 +408,7 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   }, context);
   const cls = candidates.length === 1 ? candidates[0] : undefined;
   if (cls?.kind !== 'class') return;
+  if (scope && !returnsOwnRelation(cls, scope, context)) return;
   if (assignment[0].includes('.in_account(')) {
     const modelLines = context.getFileLines?.(cls.filePath) ?? context.readFile(cls.filePath)?.split(/\r?\n/);
     const declarations = modelLines?.slice(cls.startLine, cls.endLine - 1).join('\n') ?? '';
@@ -413,6 +416,20 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   }
   const ancestry = rubyAncestry(cls.qualifiedName, context, true, callback.filePath);
   return ancestry.has('ApplicationRecord') || ancestry.has('ActiveRecord::Base') ? cls : undefined;
+}
+
+/** Recognize a plain where-built left relation; Rails `or` preserves that model for non-null receivers. */
+function returnsOwnRelation(model: Node, name: string, context: ResolutionContext): boolean {
+  const methods = context.getNodesByQualifiedName(`${model.qualifiedName}::${name}`);
+  if (methods.length !== 1) return false;
+  const method = methods[0]!;
+  if (method.kind !== 'method' || !method.isStatic || method.filePath !== model.filePath ||
+      method.endLine !== method.startLine + 3) return false;
+  const lines = context.getFileLines?.(method.filePath) ?? context.readFile(method.filePath)?.split(/\r?\n/);
+  if (!lines || lines[method.startLine - 1]?.trim() !== `def self.${name}`) return false;
+  const binding = /^\s*([a-z_]\w*) = where\([:\w ,]+\)\s*$/.exec(lines[method.startLine] ?? '');
+  return !!binding && new RegExp(`^\\s*${binding[1]}\\.or\\([a-z_]\\w*\\)\\s*$`)
+    .test(lines[method.startLine + 1] ?? '');
 }
 
 function ivarClassFromInitialize(name: string, owner: string, context: ResolutionContext): Node | null | undefined {

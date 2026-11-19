@@ -255,6 +255,46 @@ end
   end
 end
 `,
+  ...Object.fromEntries(['Own', 'Foreign'].flatMap((kind) => [
+    [`app/models/${kind.toLowerCase()}_record.rb`, `class ${kind}Record < ApplicationRecord
+  def self.visible
+    base = ${kind === 'Foreign' ? 'OtherRecord.' : ''}where(active: true)
+    base.or(extra)
+  end
+
+  def self.extra
+    ${kind === 'Foreign' ? 'OtherRecord.' : ''}where(active: false)
+  end
+
+  def publish!
+  end
+end
+`],
+    [`app/controllers/${kind.toLowerCase()}_scope_controller.rb`, `class ${kind}ScopeController < ApplicationController
+  before_action :load_record
+
+  def show
+    @record.publish!
+  end
+
+  def update
+    transition(:open)
+  end
+
+  private
+
+  def transition(state)
+    if @record.publish!
+      render state
+    end
+  end
+
+  def load_record
+    @record = ${kind}Record.visible.find(params[:id])
+  end
+end
+`],
+  ])),
 };
 
 let root = '';
@@ -371,5 +411,13 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     expect(callsAt(graph, 'app/controllers/shared_records_controller.rb', 21)).toEqual(['Record::publish!:4']);
     expect(callsAt(graph, 'app/controllers/conflicting_records_controller.rb', 21)).toEqual([]);
     expect(callsAt(graph, 'app/controllers/reassigned_records_controller.rb', 21)).toEqual([]);
+  });
+
+  it.skipIf(skip)('follows a proven model relation through a callback and a symbol-argument helper', async () => {
+    const graph = await index(backend);
+    for (const line of [5, 15]) {
+      expect(callsAt(graph, 'app/controllers/own_scope_controller.rb', line)).toEqual(['OwnRecord::publish!:11']);
+      expect(callsAt(graph, 'app/controllers/foreign_scope_controller.rb', line)).toEqual([]);
+    }
   });
 });
