@@ -136,6 +136,24 @@ end
   end
 end
 `,
+  'app/controllers/helper_records_controller.rb': `class HelperRecordsController < ApplicationController
+  before_action :load_record, only: [:publish]
+
+  def publish
+    @record.publish!
+  end
+
+  private
+
+  def record_scope
+    Record.where(account_id: current_account.id)
+  end
+
+  def load_record
+    @record = record_scope.find(params[:id])
+  end
+end
+`,
   'app/controllers/other_records_controller.rb': `class OtherRecordsController < ApplicationController
   before_action :load_record, only: [:publish]
 
@@ -296,6 +314,11 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
   it.skipIf(skip)('resolves a scoped lookup despite writes in an unrelated action', async () => {
     const graph = await index(backend);
     expect(callsAt(graph, 'app/controllers/scoped_records_controller.rb', 6)).toEqual(['Record::publish!:4']);
+  });
+
+  it.skipIf(skip)('resolves a callback lookup through a local relation helper', async () => {
+    const graph = await index(backend);
+    expect(callsAt(graph, 'app/controllers/helper_records_controller.rb', 5)).toEqual(['Record::publish!:4']);
   });
 
   it.skipIf(skip)('links a call after an initial controller constructor assignment', async () => {

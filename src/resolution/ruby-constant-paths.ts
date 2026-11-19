@@ -299,7 +299,7 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   if (callbackIndex < 0) return;
   const callback = ordered[callbackIndex]!;
   if (conditional.has(callback.name)) return;
-  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*))\.find(?:\(params\[:\w+\]\)|[ \t]+params\[:\w+\])\s*$`)
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*)|([a-z_]\w*))\.find(?:\(params\[:\w+\]\)|[ \t]+params\[:\w+\])\s*$`)
     .exec(lines[callback.startLine] ?? '');
   if (!assignment) return;
   let path = assignment[2], absolute = !!assignment[1], source = callback;
@@ -314,6 +314,18 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
     [, , path] = match;
     absolute = !!match[1];
     source = relation;
+  } else if (assignment[4]) {
+    const helpers = methods(assignment[4]);
+    if (helpers.length !== 1) return;
+    const helper = helpers[0]!;
+    if (helper.endLine !== helper.startLine + 2 ||
+        !new RegExp(`^\\s*def ${assignment[4]}(?:\\(\\))?\\s*$`).test(lines[helper.startLine - 1] ?? '')) return;
+    const match = /^\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$/
+      .exec(lines[helper.startLine] ?? '');
+    if (!match) return;
+    [, , path] = match;
+    absolute = !!match[1];
+    source = helper;
   }
   if (!path) return;
   const candidates = constantsNamed(path, absolute, {
