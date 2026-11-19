@@ -119,7 +119,7 @@ end
 `,
   'app/controllers/scoped_records_controller.rb': `class ScopedRecordsController < ApplicationController
   before_action :load_record,
-                only: [:publish]
+                only: %i[ publish show ]
 
   def publish
     @record.publish!

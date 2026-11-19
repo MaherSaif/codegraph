@@ -243,9 +243,10 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const applicable: string[] = [];
   const excluded = new Set<string>();
   for (const [text] of registrations) {
-    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(text);
+    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(only|except):[ \t]*(?:\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\]|%i\[[ \t]*(\w+(?:[ \t]+\w+)*)[ \t]*\]))?[ \t]*$/.exec(text);
     if (!registration || registration[1] === caller.name) return;
-    const actions = [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
+    const actions = registration[4]?.split(/[ \t]+/)
+      ?? [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
     if (!registration[2] || actions.includes(caller.name) === (registration[2] === 'only')) {
       applicable.push(registration[1]!);
       if (registration[2] === 'except') for (const action of actions) excluded.add(action);
