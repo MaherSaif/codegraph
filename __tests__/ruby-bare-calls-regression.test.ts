@@ -20,6 +20,14 @@ beforeAll(async () => {
     subtotal + tax
   end
 
+  def totals
+    { subtotal: subtotal }
+  end
+
+  def shadowed_hash(subtotal)
+    { subtotal: subtotal }
+  end
+
   def with_parameter(subtotal)
     subtotal + 1
   end
@@ -55,6 +63,7 @@ describe('Ruby bare method calls', () => {
       'Item::tax -> Item::subtotal',
       'Item::total -> Item::subtotal',
       'Item::total -> Item::tax',
+      'Item::totals -> Item::subtotal',
     ]);
   });
 });

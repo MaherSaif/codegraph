@@ -32,9 +32,12 @@ function rubyHasLocalBinding(method: SyntaxNode, name: string): boolean {
   return hasBinding(method);
 }
 
-function rubyBinaryMethodCall(node: SyntaxNode): boolean {
-  if (node.parent?.type !== 'binary') return false;
-  let scope = node.parent.parent;
+function rubyExpressionMethodCall(node: SyntaxNode): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  const value = parent.type === 'pair' ? parent.childForFieldName('value') : null;
+  if (parent.type !== 'binary' && value?.startIndex !== node.startIndex) return false;
+  let scope = parent.parent;
   while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
   return !!scope && !rubyHasLocalBinding(scope, node.text);
 }
@@ -120,12 +123,12 @@ export const rubyExtractor: LanguageExtractor = {
     const parent = node.parent;
     if (!parent) return undefined;
 
-    // Only statement-level identifiers — direct children of block/body nodes
+    // Statement-level identifiers and unbound identifiers in selected expressions.
     const BLOCK_PARENTS = new Set([
       'body_statement', 'then', 'else', 'do', 'begin',
       'rescue', 'ensure', 'when',
     ]);
-    if (!BLOCK_PARENTS.has(parent.type) && !rubyBinaryMethodCall(node)) return undefined;
+    if (!BLOCK_PARENTS.has(parent.type) && !rubyExpressionMethodCall(node)) return undefined;
 
     const name = node.text;
 
