@@ -49,6 +49,11 @@ beforeAll(async () => {
     subtotal
   end
 
+  def default_value(value = consume(subtotal))
+    consume(subtotal)
+    value
+  end
+
   def after_block_parameter
     [1].each { |subtotal| subtotal + 1 }
     subtotal + 1
@@ -116,6 +121,7 @@ describe('Ruby bare method calls', () => {
       'Item::argument -> Item::subtotal',
       'Item::assign_attribute -> Item::subtotal',
       'Item::assign_local -> Item::subtotal',
+      'Item::default_value -> Item::subtotal',
       'Item::returned -> Item::subtotal',
       'Item::standalone_call -> Item::subtotal',
       'Item::tax -> Item::subtotal',
@@ -126,6 +132,6 @@ describe('Ruby bare method calls', () => {
     const blockMethod = methods.find((method) => method.qualifiedName === 'Item::after_block_parameter')!;
     const subtotalEdges = graph.getOutgoingEdgesFrom([blockMethod.id])
       .filter((edge) => edge.kind === 'calls' && graph.getNode(edge.target)?.qualifiedName === 'Item::subtotal');
-    expect(subtotalEdges.map((edge) => edge.line)).toEqual([43]);
+    expect(subtotalEdges.map((edge) => edge.line)).toEqual([48]);
   });
 });

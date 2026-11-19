@@ -22,11 +22,18 @@ function rubyHasLocalBinding(method: SyntaxNode, reference: SyntaxNode): boolean
   const name = reference.text;
   const containsName = (node: SyntaxNode): boolean =>
     node.type === 'identifier' ? node.text === name : node.namedChildren.some(containsName);
+  const containsParameter = (node: SyntaxNode): boolean => {
+    if (node.type === 'identifier') return node.text === name;
+    const value = node.type === 'optional_parameter' || node.type === 'keyword_parameter'
+      ? node.childForFieldName('value') : null;
+    return node.namedChildren.some((child) =>
+      (!value || child.startIndex !== value.startIndex || child.endIndex !== value.endIndex) && containsParameter(child));
+  };
   const hasBinding = (node: SyntaxNode): boolean => {
-    if (node.type === 'method_parameters') return containsName(node);
+    if (node.type === 'method_parameters') return containsParameter(node);
     if (node.type === 'block_parameters') {
       const block = node.parent;
-      return !!block && block.startIndex <= reference.startIndex && reference.endIndex <= block.endIndex && containsName(node);
+      return !!block && block.startIndex <= reference.startIndex && reference.endIndex <= block.endIndex && containsParameter(node);
     }
     if (node.type === 'assignment' || node.type === 'operator_assignment') {
       const left = node.childForFieldName('left');
