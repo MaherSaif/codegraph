@@ -240,30 +240,55 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   if (!lines) return;
   const body = stripCommentsForRegex(lines.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby');
   const registrations = [...body.matchAll(/^\s*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*/gm)];
-  if (registrations.length !== 1) return;
-  const registration = /^\s*before_action[ \t]+:(\w+)(?:,[ \t]*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(registrations[0]![0]);
-  if (!registration || registration[1] === caller.name) return;
-  const actions = [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
-  if (registration[2] && actions.includes(caller.name) !== (registration[2] === 'only')) return;
+  const applicable: string[] = [];
+  const excluded: string[] = [];
+  for (const [text] of registrations) {
+    const registration = /^\s*before_action[ \t]+:(\w+)(?:,[ \t]*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(text);
+    if (!registration || registration[1] === caller.name) return;
+    const actions = [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
+    if (!registration[2] || actions.includes(caller.name) === (registration[2] === 'only')) {
+      applicable.push(registration[1]!);
+      if (registration[2] === 'except') excluded.push(...actions);
+    }
+  }
   const methods = (method: string) => context.getNodesByQualifiedName(`${owner.qualifiedName}::${method}`)
     .filter((n) => n.kind === 'method' && n.isStatic !== true && n.filePath === owner.filePath);
-  const callbacks = methods(registration[1]!);
-  if (callbacks.length !== 1) return;
-  const callback = callbacks[0]!;
-  if (callback.endLine !== callback.startLine + 2) return;
-  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\([^()]*\))?\.find\(params\[:\w+\]\)\s*$`)
+  const callbacks = applicable.map(methods);
+  if (callbacks.some((matches) => matches.length !== 1)) return;
+  const ordered = callbacks.flat();
+  const soleWrite = (variable: string, ignored: Node[]) => {
+    const writes = new RegExp(String.raw`(?<![@\w])@${variable}\s*(?:,|(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=(?![=~>]))`);
+    const locations = body.split('\n').flatMap((text, index) => writes.test(text) ? [owner.startLine + index] : [])
+      .filter((line) => !ignored.some((method) => method.startLine <= line && line <= method.endLine));
+    return locations.length === 1 ? locations[0] : undefined;
+  };
+  const excludedActions = excluded.filter((action) => !applicable.includes(action)).flatMap(methods);
+  const write = soleWrite(name, excludedActions);
+  const callbackIndex = ordered.findIndex((method) => method.endLine === method.startLine + 2 && method.startLine + 1 === write);
+  if (callbackIndex < 0) return;
+  const callback = ordered[callbackIndex]!;
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\([^()]*\))?|@([a-z_]\w*))\.find\(params\[:\w+\]\)\s*$`)
     .exec(lines[callback.startLine] ?? '');
   if (!assignment) return;
-  const ignored = [callback, ...(registration[2] === 'except' ? actions.flatMap(methods) : [])];
-  const writes = new RegExp(String.raw`(?<![@\w])@${name}\s*(?:,|(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=(?![=~>]))`);
-  if (body.split('\n').some((text, index) => {
-    const line = owner.startLine + index;
-    return writes.test(text) && !ignored.some((method) => method.startLine <= line && line <= method.endLine);
-  })) return;
-  const cls = constantsNamed(assignment[2]!, assignment[1] !== undefined, {
-    fromNodeId: callback.id, referenceName: assignment[2]!, referenceKind: 'references',
-    line: callback.startLine + 1, column: 0, filePath: callback.filePath, language: 'ruby',
-  }, context)[0];
+  let path = assignment[2], absolute = !!assignment[1], source = callback;
+  if (assignment[3]) {
+    const relationWrite = soleWrite(assignment[3], excludedActions);
+    const relation = ordered.slice(0, callbackIndex).find((method) =>
+      method.endLine === method.startLine + 2 && method.startLine + 1 === relationWrite);
+    if (!relation) return;
+    const match = new RegExp(String.raw`^\s*@${assignment[3]}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$`)
+      .exec(lines[relation.startLine] ?? '');
+    if (!match) return;
+    [, , path] = match;
+    absolute = !!match[1];
+    source = relation;
+  }
+  if (!path) return;
+  const candidates = constantsNamed(path, absolute, {
+    fromNodeId: source.id, referenceName: path, referenceKind: 'references',
+    line: source.startLine + 1, column: 0, filePath: source.filePath, language: 'ruby',
+  }, context);
+  const cls = candidates.length === 1 ? candidates[0] : undefined;
   if (cls?.kind !== 'class') return;
   const ancestry = rubyAncestry(cls.qualifiedName, context, true, callback.filePath);
   return ancestry.has('ApplicationRecord') || ancestry.has('ActiveRecord::Base') ? cls : undefined;

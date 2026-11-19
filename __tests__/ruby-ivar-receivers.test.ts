@@ -154,6 +154,29 @@ end
   end
 end
 `,
+  ...Object.fromEntries([true, false].map((ordered) => [
+    `app/controllers/${ordered ? 'ordered' : 'reversed'}_controller.rb`,
+    `class ${ordered ? 'Ordered' : 'Reversed'}Controller < ApplicationController
+  ${ordered ? 'before_action :scope_records' : 'before_action :load_record, except: [:index]'}
+  ${ordered ? 'before_action :load_record, except: [:index]' : 'before_action :scope_records'}
+  def publish
+    @record.publish!
+  end
+
+  def index
+    @records = @records.where(active: true)
+  end
+
+  def scope_records
+    @records = Record.where(id: permitted_ids.to_a())
+  end
+
+  def load_record
+    @record = @records.find(params[:id])
+  end
+end
+`,
+  ])),
 };
 
 let root = '';
@@ -242,5 +265,11 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     const controller = 'app/controllers/drafts_controller.rb';
     expect(callsAt(graph, controller, 7)).toEqual(['Record::publish!:4']);
     expect(callsAt(graph, controller, 14)).toEqual([]);
+  });
+
+  it.skipIf(skip)('follows a relation initialized by an earlier applicable callback only', async () => {
+    const graph = await index(backend);
+    expect(callsAt(graph, 'app/controllers/ordered_controller.rb', 5)).toEqual(['Record::publish!:4']);
+    expect(callsAt(graph, 'app/controllers/reversed_controller.rb', 5)).toEqual([]);
   });
 });
