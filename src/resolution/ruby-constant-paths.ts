@@ -248,16 +248,20 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const lines = context.getFileLines?.(owner.filePath) ?? context.readFile(owner.filePath)?.split(/\r?\n/);
   if (!lines) return;
   const body = stripCommentsForRegex(lines.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby');
-  const registrations = [...body.matchAll(/^[ \t]*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*(?:\n[ \t]+(?:only|except):[^\n]*)?/gm)];
+  const registrationLines = /^[ \t]*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*(?:\n[ \t]+(?:only|except):[^\n]*)?(?:\n[ \t]*(?::\w+[^\n]*|\][ \t]*$))*/gm;
+  const registrations = [...body.matchAll(registrationLines)];
   const applicable: string[] = [];
+  const conditional = new Set<string>();
   const excluded = new Set<string>();
   for (const [text] of registrations) {
-    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(only|except):[ \t]*(?:\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\]|%i\[[ \t]*(\w+(?:[ \t]+\w+)*)[ \t]*\]))?[ \t]*$/.exec(text);
-    if (!registration || registration[1] === caller.name) return;
+    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(?:(only|except):[ \t]*(?:\[((?:\s*:\w+\s*,)*\s*:\w+\s*)\]|%i\[[ \t]*(\w+(?:[ \t]+\w+)*)[ \t]*\])|((?:if|unless):[ \t]*->\s*\{\s*Rails\.env\.\w+\?\s*\})))?[ \t]*$/.exec(text);
+    const method = registration?.[1];
+    if (!registration || !method || method === caller.name) return;
+    if (registration[5]) conditional.add(method);
     const actions = registration[4]?.split(/[ \t]+/)
       ?? [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
     if (!registration[2] || actions.includes(caller.name) === (registration[2] === 'only')) {
-      applicable.push(registration[1]!);
+      applicable.push(method);
       if (registration[2] === 'except') for (const action of actions) excluded.add(action);
       if (registration[2] === 'only') {
         for (const action of ['index', 'new', 'create']) {
@@ -285,7 +289,7 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const outsideActions = body.split('\n').filter((_, index) => {
     const line = owner.startLine + index;
     return !actionCandidates.some((method) => method.startLine <= line && line <= method.endLine);
-  }).join('\n').replace(/^[ \t]*before_action\b[^\n]*(?:\n[ \t]+(?:only|except):[^\n]*)?/gm, '');
+  }).join('\n').replace(registrationLines, '');
   // Calls to Model.new are not calls to the controller's new action.
   const excludedActions = actionCandidates.some(({ name: action }) =>
     new RegExp(`(?:\\bself\\.|(?<![.\\w]))${action}\\b(?![ \\t]*:)`).test(outsideActions))
@@ -294,7 +298,8 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const callbackIndex = ordered.findIndex((method) => method.endLine === method.startLine + 2 && method.startLine + 1 === write);
   if (callbackIndex < 0) return;
   const callback = ordered[callbackIndex]!;
-  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*))\.find\(params\[:\w+\]\)\s*$`)
+  if (conditional.has(callback.name)) return;
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*))\.find(?:\(params\[:\w+\]\)|[ \t]+params\[:\w+\])\s*$`)
     .exec(lines[callback.startLine] ?? '');
   if (!assignment) return;
   let path = assignment[2], absolute = !!assignment[1], source = callback;
@@ -302,7 +307,7 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
     const relationWrite = soleWrite(assignment[3], excludedActions);
     const relation = ordered.slice(0, callbackIndex).find((method) =>
       method.endLine === method.startLine + 2 && method.startLine + 1 === relationWrite);
-    if (!relation) return;
+    if (!relation || conditional.has(relation.name)) return;
     const match = new RegExp(String.raw`^\s*@${assignment[3]}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.where\((?:[^()\n]|\([^()\n]*\))*\)\s*$`)
       .exec(lines[relation.startLine] ?? '');
     if (!match) return;

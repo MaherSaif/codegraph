@@ -99,8 +99,8 @@ class Record < ApplicationRecord
 end
 `,
   'app/controllers/records_controller.rb': `class RecordsController < ApplicationController
-  before_action :load_record, except: [:create]
-
+  before_action :load_record, except: [:create,
+                                       :index]
   def publish
     @record.publish!
   end
@@ -113,7 +113,7 @@ end
   private
 
   def load_record
-    @record = Record.where(account_id: current_account.id).find(params[:id])
+    @record = Record.where(account_id: current_account.id).find params[:id]
   end
 end
 `,
