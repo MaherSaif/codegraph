@@ -28,6 +28,23 @@ beforeAll(async () => {
     { subtotal: subtotal }
   end
 
+  def assign_attribute
+    self.subtotal = subtotal
+  end
+
+  def assign_local
+    result = subtotal
+  end
+
+  def assign_shadowed(subtotal)
+    result = subtotal
+  end
+
+  def assign_local_shadow
+    subtotal = 4
+    result = subtotal
+  end
+
   def with_parameter(subtotal)
     subtotal + 1
   end
@@ -60,6 +77,8 @@ describe('Ruby bare method calls', () => {
       .filter((edge) => edge.kind === 'calls')
       .map((edge) => `${method.qualifiedName} -> ${graph.getNode(edge.target)?.qualifiedName}`));
     expect(calls.sort()).toEqual([
+      'Item::assign_attribute -> Item::subtotal',
+      'Item::assign_local -> Item::subtotal',
       'Item::tax -> Item::subtotal',
       'Item::total -> Item::subtotal',
       'Item::total -> Item::tax',

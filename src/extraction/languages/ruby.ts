@@ -35,7 +35,9 @@ function rubyHasLocalBinding(method: SyntaxNode, name: string): boolean {
 function rubyExpressionMethodCall(node: SyntaxNode): boolean {
   const parent = node.parent;
   if (!parent) return false;
-  const value = parent.type === 'pair' ? parent.childForFieldName('value') : null;
+  const value = parent.type === 'pair' ? parent.childForFieldName('value')
+    : parent.type === 'assignment' || parent.type === 'operator_assignment' ? parent.childForFieldName('right')
+    : null;
   if (parent.type !== 'binary' && value?.startIndex !== node.startIndex) return false;
   let scope = parent.parent;
   while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
