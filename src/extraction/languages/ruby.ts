@@ -47,7 +47,8 @@ function rubyHasLocalBinding(method: SyntaxNode, reference: SyntaxNode): boolean
 function rubyExpressionMethodCall(node: SyntaxNode): boolean {
   const parent = node.parent;
   if (!parent) return false;
-  const value = parent.type === 'pair' ? parent.childForFieldName('value')
+  const value = parent.type === 'pair' || parent.type === 'optional_parameter' || parent.type === 'keyword_parameter'
+    ? parent.childForFieldName('value')
     : parent.type === 'assignment' || parent.type === 'operator_assignment' ? parent.childForFieldName('right')
     : null;
   if (parent.type !== 'binary' && parent.type !== 'argument_list' && parent.type !== 'return' &&

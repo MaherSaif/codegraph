@@ -2562,11 +2562,16 @@ export class TreeSitterExtractor {
    * Each default, and a computed key in a destructured parameter, is walked as
    * the body is, with the same scope on the stack, so its calls and `new`
    * attribute to the function. The names a parameter binds and its type
-   * annotation are not walked. TS/JS only: elsewhere a default may run once,
-   * when the definition does (Python). A function with no body never runs.
+   * annotation are not walked. TS/JS and Ruby only: elsewhere a default may
+   * run once, when the definition does (Python).
    * Mirrored in the kernel (tsjs/extractors.rs visit_parameter_defaults).
    */
   private visitParameterDefaults(fn: SyntaxNode, body: SyntaxNode | null | undefined): void {
+    if (this.language === 'ruby') {
+      const params = getChildByField(fn, 'parameters');
+      if (params) this.visitPatternDefaults(params);
+      return;
+    }
     if (!body || !TS_JS_CHAIN_LANGUAGES.has(this.language)) return;
     // A class field holds its function: `onPick = (item = first()) => {…}`.
     const owner = fn.type === 'public_field_definition' || fn.type === 'field_definition' ? body.parent : fn;
@@ -2578,6 +2583,7 @@ export class TreeSitterExtractor {
   private visitPatternDefaults(node: SyntaxNode): void {
     switch (node.type) {
       case 'formal_parameters':
+      case 'method_parameters':
       case 'object_pattern':
       case 'array_pattern':
       case 'rest_pattern':
@@ -2587,6 +2593,7 @@ export class TreeSitterExtractor {
         }
         return;
       case 'required_parameter':
+      case 'keyword_parameter':
       case 'optional_parameter': {
         const pattern = getChildByField(node, 'pattern');
         if (pattern) this.visitPatternDefaults(pattern);

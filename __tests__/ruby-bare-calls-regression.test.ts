@@ -93,6 +93,15 @@ beforeAll(async () => {
     subtotal = 4
     subtotal + 1
   end
+
+  def keyword_default(value: subtotal)
+  end
+
+  def explicit_default(value = subtotal())
+  end
+
+  def shadowed_default(subtotal, value: subtotal)
+  end
 end
 
 class Unrelated
@@ -122,6 +131,9 @@ describe('Ruby bare method calls', () => {
       'Item::assign_attribute -> Item::subtotal',
       'Item::assign_local -> Item::subtotal',
       'Item::default_value -> Item::subtotal',
+      'Item::default_value -> Item::subtotal',
+      'Item::explicit_default -> Item::subtotal',
+      'Item::keyword_default -> Item::subtotal',
       'Item::returned -> Item::subtotal',
       'Item::standalone_call -> Item::subtotal',
       'Item::tax -> Item::subtotal',
