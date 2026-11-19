@@ -16,13 +16,18 @@ function isRubyClassMethod(node: SyntaxNode): boolean {
   return parent?.type === 'singleton_class';
 }
 
-// A bare identifier can also be a local or parameter. Conservatively exclude
-// names bound anywhere in the method, including block parameters.
-function rubyHasLocalBinding(method: SyntaxNode, name: string): boolean {
+// A bare identifier can also be a local or parameter. Block parameters bind
+// only inside their own block; method bindings remain conservatively scoped.
+function rubyHasLocalBinding(method: SyntaxNode, reference: SyntaxNode): boolean {
+  const name = reference.text;
   const containsName = (node: SyntaxNode): boolean =>
     node.type === 'identifier' ? node.text === name : node.namedChildren.some(containsName);
   const hasBinding = (node: SyntaxNode): boolean => {
-    if (node.type === 'method_parameters' || node.type === 'block_parameters') return containsName(node);
+    if (node.type === 'method_parameters') return containsName(node);
+    if (node.type === 'block_parameters') {
+      const block = node.parent;
+      return !!block && block.startIndex <= reference.startIndex && reference.endIndex <= block.endIndex && containsName(node);
+    }
     if (node.type === 'assignment' || node.type === 'operator_assignment') {
       const left = node.childForFieldName('left');
       if (left && containsName(left)) return true;
@@ -42,7 +47,7 @@ function rubyExpressionMethodCall(node: SyntaxNode): boolean {
       value?.startIndex !== node.startIndex) return false;
   let scope = parent.parent;
   while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
-  return !!scope && !rubyHasLocalBinding(scope, node.text);
+  return !!scope && !rubyHasLocalBinding(scope, node);
 }
 
 
@@ -135,7 +140,7 @@ export const rubyExtractor: LanguageExtractor = {
     if (BLOCK_PARENTS.has(parent.type)) {
       let scope = parent.parent;
       while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
-      if (scope && rubyHasLocalBinding(scope, node.text)) return undefined;
+      if (scope && rubyHasLocalBinding(scope, node)) return undefined;
     }
 
     const name = node.text;
