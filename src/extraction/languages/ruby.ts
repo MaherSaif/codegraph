@@ -16,6 +16,30 @@ function isRubyClassMethod(node: SyntaxNode): boolean {
   return parent?.type === 'singleton_class';
 }
 
+// A bare identifier can also be a local or parameter. Conservatively exclude
+// names bound anywhere in the method, including block parameters.
+function rubyHasLocalBinding(method: SyntaxNode, name: string): boolean {
+  const containsName = (node: SyntaxNode): boolean =>
+    node.type === 'identifier' ? node.text === name : node.namedChildren.some(containsName);
+  const hasBinding = (node: SyntaxNode): boolean => {
+    if (node.type === 'method_parameters' || node.type === 'block_parameters') return containsName(node);
+    if (node.type === 'assignment' || node.type === 'operator_assignment') {
+      const left = node.childForFieldName('left');
+      if (left && containsName(left)) return true;
+    }
+    return node.namedChildren.some(hasBinding);
+  };
+  return hasBinding(method);
+}
+
+function rubyBinaryMethodCall(node: SyntaxNode): boolean {
+  if (node.parent?.type !== 'binary') return false;
+  let scope = node.parent.parent;
+  while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
+  return !!scope && !rubyHasLocalBinding(scope, node.text);
+}
+
+
 export const rubyExtractor: LanguageExtractor = {
   functionTypes: ['method'],
   classTypes: ['class'],
@@ -101,7 +125,7 @@ export const rubyExtractor: LanguageExtractor = {
       'body_statement', 'then', 'else', 'do', 'begin',
       'rescue', 'ensure', 'when',
     ]);
-    if (!BLOCK_PARENTS.has(parent.type)) return undefined;
+    if (!BLOCK_PARENTS.has(parent.type) && !rubyBinaryMethodCall(node)) return undefined;
 
     const name = node.text;
 
