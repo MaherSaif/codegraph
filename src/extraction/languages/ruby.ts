@@ -38,7 +38,8 @@ function rubyExpressionMethodCall(node: SyntaxNode): boolean {
   const value = parent.type === 'pair' ? parent.childForFieldName('value')
     : parent.type === 'assignment' || parent.type === 'operator_assignment' ? parent.childForFieldName('right')
     : null;
-  if (parent.type !== 'binary' && value?.startIndex !== node.startIndex) return false;
+  if (parent.type !== 'binary' && parent.type !== 'argument_list' && parent.type !== 'return' &&
+      value?.startIndex !== node.startIndex) return false;
   let scope = parent.parent;
   while (scope && scope.type !== 'method' && scope.type !== 'singleton_method') scope = scope.parent;
   return !!scope && !rubyHasLocalBinding(scope, node.text);

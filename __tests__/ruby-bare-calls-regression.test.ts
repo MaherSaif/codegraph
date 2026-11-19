@@ -49,6 +49,23 @@ beforeAll(async () => {
     subtotal
   end
 
+  def returned
+    return subtotal
+  end
+
+  def argument
+    consume(subtotal)
+  end
+
+  def returned_parameter(subtotal)
+    return subtotal
+  end
+
+  def argument_local
+    subtotal = 4
+    consume(subtotal)
+  end
+
   def standalone_parameter(subtotal)
     subtotal
   end
@@ -90,8 +107,10 @@ describe('Ruby bare method calls', () => {
       .filter((edge) => edge.kind === 'calls')
       .map((edge) => `${method.qualifiedName} -> ${graph.getNode(edge.target)?.qualifiedName}`));
     expect(calls.sort()).toEqual([
+      'Item::argument -> Item::subtotal',
       'Item::assign_attribute -> Item::subtotal',
       'Item::assign_local -> Item::subtotal',
+      'Item::returned -> Item::subtotal',
       'Item::standalone_call -> Item::subtotal',
       'Item::tax -> Item::subtotal',
       'Item::total -> Item::subtotal',
