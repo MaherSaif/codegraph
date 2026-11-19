@@ -137,7 +137,7 @@ end
 end
 `,
   'app/controllers/helper_records_controller.rb': `class HelperRecordsController < ApplicationController
-  before_action :load_record, only: [:publish]
+  before_action :load_record, only: %w[publish]
 
   def publish
     @record.publish!

@@ -254,7 +254,7 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const conditional = new Set<string>();
   const excluded = new Set<string>();
   for (const [text] of registrations) {
-    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(?:(only|except):[ \t]*(?:\[((?:\s*:\w+\s*,)*\s*:\w+\s*)\]|%i\[[ \t]*(\w+(?:[ \t]+\w+)*)[ \t]*\])|((?:if|unless):[ \t]*->\s*\{\s*Rails\.env\.\w+\?\s*\})))?[ \t]*$/.exec(text);
+    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(?:(only|except):[ \t]*(?:\[((?:\s*:\w+\s*,)*\s*:\w+\s*)\]|%[iw]\[[ \t]*(\w+(?:[ \t]+\w+)*)[ \t]*\])|((?:if|unless):[ \t]*->\s*\{\s*Rails\.env\.\w+\?\s*\})))?[ \t]*$/.exec(text);
     const method = registration?.[1];
     if (!registration || !method || method === caller.name) return;
     if (registration[5]) conditional.add(method);
