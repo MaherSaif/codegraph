@@ -95,6 +95,7 @@ end
 class Record < ApplicationRecord
   def publish!
   end
+  scope :in_account, ->(id) { where account_id: id }
 end
 `,
   'app/controllers/records_controller.rb': `class RecordsController < ApplicationController
@@ -113,6 +114,25 @@ end
 
   def load_record
     @record = Record.where(account_id: current_account.id).find(params[:id])
+  end
+end
+`,
+  'app/controllers/scoped_records_controller.rb': `class ScopedRecordsController < ApplicationController
+  before_action :load_record,
+                only: [:publish]
+
+  def publish
+    @record.publish!
+    respond_with(@record, location: :records)
+  end
+
+  def new
+    @record = Record.new
+    @record.publish!
+  end
+
+  def load_record
+    @record = Record.in_account(Current.account.id).find(params[:id])
   end
 end
 `,
@@ -271,5 +291,10 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     const graph = await index(backend);
     expect(callsAt(graph, 'app/controllers/ordered_controller.rb', 5)).toEqual(['Record::publish!:4']);
     expect(callsAt(graph, 'app/controllers/reversed_controller.rb', 5)).toEqual([]);
+  });
+
+  it.skipIf(skip)('resolves a scoped lookup despite writes in an unrelated action', async () => {
+    const graph = await index(backend);
+    expect(callsAt(graph, 'app/controllers/scoped_records_controller.rb', 6)).toEqual(['Record::publish!:4']);
   });
 });

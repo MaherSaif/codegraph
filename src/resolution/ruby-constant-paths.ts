@@ -239,16 +239,21 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   const lines = context.getFileLines?.(owner.filePath) ?? context.readFile(owner.filePath)?.split(/\r?\n/);
   if (!lines) return;
   const body = stripCommentsForRegex(lines.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby');
-  const registrations = [...body.matchAll(/^\s*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*/gm)];
+  const registrations = [...body.matchAll(/^[ \t]*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*(?:\n[ \t]+(?:only|except):[^\n]*)?/gm)];
   const applicable: string[] = [];
-  const excluded: string[] = [];
+  const excluded = new Set<string>();
   for (const [text] of registrations) {
-    const registration = /^\s*before_action[ \t]+:(\w+)(?:,[ \t]*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(text);
+    const registration = /^\s*before_action[ \t]+:(\w+)(?:,\s*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(text);
     if (!registration || registration[1] === caller.name) return;
     const actions = [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
     if (!registration[2] || actions.includes(caller.name) === (registration[2] === 'only')) {
       applicable.push(registration[1]!);
-      if (registration[2] === 'except') excluded.push(...actions);
+      if (registration[2] === 'except') for (const action of actions) excluded.add(action);
+      if (registration[2] === 'only') {
+        for (const action of ['index', 'new', 'create']) {
+          if (!actions.includes(action)) excluded.add(action);
+        }
+      }
     }
   }
   const methods = (method: string) => context.getNodesByQualifiedName(`${owner.qualifiedName}::${method}`)
@@ -257,17 +262,29 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   if (callbacks.some((matches) => matches.length !== 1)) return;
   const ordered = callbacks.flat();
   const soleWrite = (variable: string, ignored: Node[]) => {
-    const writes = new RegExp(String.raw`(?<![@\w])@${variable}\s*(?:,|(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=(?![=~>]))`);
+    const writes = new RegExp(String.raw`(?<![@\w])@${variable}\s*(?:(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=|(?:,\s*\*?[@$\w]+)+\s*=)(?![=~>])`);
     const locations = body.split('\n').flatMap((text, index) => writes.test(text) ? [owner.startLine + index] : [])
       .filter((line) => !ignored.some((method) => method.startLine <= line && line <= method.endLine));
     return locations.length === 1 ? locations[0] : undefined;
   };
-  const excludedActions = excluded.filter((action) => !applicable.includes(action)).flatMap(methods);
+  const actionCandidates = [...excluded].flatMap((action) => {
+    if (action === caller.name || applicable.includes(action)) return [];
+    const declarations = methods(action);
+    return declarations.length === 1 ? declarations : [];
+  });
+  const outsideActions = body.split('\n').filter((_, index) => {
+    const line = owner.startLine + index;
+    return !actionCandidates.some((method) => method.startLine <= line && line <= method.endLine);
+  }).join('\n').replace(/^[ \t]*before_action\b[^\n]*(?:\n[ \t]+(?:only|except):[^\n]*)?/gm, '');
+  // Calls to Model.new are not calls to the controller's new action.
+  const excludedActions = actionCandidates.some(({ name: action }) =>
+    new RegExp(`(?:\\bself\\.|(?<![.\\w]))${action}\\b(?![ \\t]*:)`).test(outsideActions))
+    ? [] : actionCandidates;
   const write = soleWrite(name, excludedActions);
   const callbackIndex = ordered.findIndex((method) => method.endLine === method.startLine + 2 && method.startLine + 1 === write);
   if (callbackIndex < 0) return;
   const callback = ordered[callbackIndex]!;
-  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\([^()]*\))?|@([a-z_]\w*))\.find\(params\[:\w+\]\)\s*$`)
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(?:(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\((?:[^()\n]|\([^()\n]*\))*\)|\.in_account\(Current\.account\.id\))?|@([a-z_]\w*))\.find\(params\[:\w+\]\)\s*$`)
     .exec(lines[callback.startLine] ?? '');
   if (!assignment) return;
   let path = assignment[2], absolute = !!assignment[1], source = callback;
@@ -290,6 +307,11 @@ function railsCallbackClass(name: string, caller: Node, owner: Node, context: Re
   }, context);
   const cls = candidates.length === 1 ? candidates[0] : undefined;
   if (cls?.kind !== 'class') return;
+  if (assignment[0].includes('.in_account(')) {
+    const modelLines = context.getFileLines?.(cls.filePath) ?? context.readFile(cls.filePath)?.split(/\r?\n/);
+    const declarations = modelLines?.slice(cls.startLine, cls.endLine - 1).join('\n') ?? '';
+    if (!/^[ \t]*scope :in_account, ->\(id\) \{ where account_id: id \}[ \t]*$/m.test(declarations)) return;
+  }
   const ancestry = rubyAncestry(cls.qualifiedName, context, true, callback.filePath);
   return ancestry.has('ApplicationRecord') || ancestry.has('ActiveRecord::Base') ? cls : undefined;
 }
