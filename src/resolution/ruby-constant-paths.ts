@@ -175,10 +175,45 @@ export function ivarClass(name: string, ref: UnresolvedRef, context: ResolutionC
   let memo = IVAR_CLASSES.get(context);
   if (!memo) IVAR_CLASSES.set(context, (memo = new Map()));
   const key = `${owner.qualifiedName}\0${name}`;
-  if (memo.has(key)) return memo.get(key);
-  const found = ivarClassFromInitialize(name, owner.qualifiedName, context);
-  memo.set(key, found);
-  return found;
+  if (!memo.has(key)) memo.set(key, ivarClassFromInitialize(name, owner.qualifiedName, context));
+  const initialized = memo.get(key);
+  return initialized === undefined ? railsCallbackClass(name, caller, owner, context) : initialized;
+}
+
+/** A local controller callback assigning one record via Model(.where(...)).find(params[:key]). */
+function railsCallbackClass(name: string, caller: Node, owner: Node, context: ResolutionContext): Node | undefined {
+  if (caller.filePath !== owner.filePath || !/(?:^|\/)app\/controllers\/.*_controller\.rb$/.test(owner.filePath)) return;
+  const lines = context.getFileLines?.(owner.filePath) ?? context.readFile(owner.filePath)?.split(/\r?\n/);
+  if (!lines) return;
+  const body = stripCommentsForRegex(lines.slice(owner.startLine - 1, owner.endLine).join('\n'), 'ruby');
+  const registrations = [...body.matchAll(/^\s*(?:before_action|append_before_action|prepend_before_action|skip_before_action)\b[^\n]*/gm)];
+  if (registrations.length !== 1) return;
+  const registration = /^\s*before_action[ \t]+:(\w+)(?:,[ \t]*(only|except):[ \t]*\[((?:[ \t]*:\w+[ \t]*,)*[ \t]*:\w+[ \t]*)\])?[ \t]*$/.exec(registrations[0]![0]);
+  if (!registration || registration[1] === caller.name) return;
+  const actions = [...(registration[3] ?? '').matchAll(/:(\w+)/g)].map((m) => m[1]!);
+  if (registration[2] && actions.includes(caller.name) !== (registration[2] === 'only')) return;
+  const methods = (method: string) => context.getNodesByQualifiedName(`${owner.qualifiedName}::${method}`)
+    .filter((n) => n.kind === 'method' && n.isStatic !== true && n.filePath === owner.filePath);
+  const callbacks = methods(registration[1]!);
+  if (callbacks.length !== 1) return;
+  const callback = callbacks[0]!;
+  if (callback.endLine !== callback.startLine + 2) return;
+  const assignment = new RegExp(String.raw`^\s*@${name}\s*=\s*(::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.where\([^()]*\))?\.find\(params\[:\w+\]\)\s*$`)
+    .exec(lines[callback.startLine] ?? '');
+  if (!assignment) return;
+  const ignored = [callback, ...(registration[2] === 'except' ? actions.flatMap(methods) : [])];
+  const writes = new RegExp(String.raw`(?<![@\w])@${name}\s*(?:,|(?:\|\||&&|\*\*|<<|>>|[-+*/%|&^])?=(?![=~>]))`);
+  if (body.split('\n').some((text, index) => {
+    const line = owner.startLine + index;
+    return writes.test(text) && !ignored.some((method) => method.startLine <= line && line <= method.endLine);
+  })) return;
+  const cls = constantsNamed(assignment[2]!, assignment[1] !== undefined, {
+    fromNodeId: callback.id, referenceName: assignment[2]!, referenceKind: 'references',
+    line: callback.startLine + 1, column: 0, filePath: callback.filePath, language: 'ruby',
+  }, context)[0];
+  if (cls?.kind !== 'class') return;
+  const ancestry = rubyAncestry(cls.qualifiedName, context, true, callback.filePath);
+  return ancestry.has('ApplicationRecord') || ancestry.has('ActiveRecord::Base') ? cls : undefined;
 }
 
 function ivarClassFromInitialize(name: string, owner: string, context: ResolutionContext): Node | null | undefined {

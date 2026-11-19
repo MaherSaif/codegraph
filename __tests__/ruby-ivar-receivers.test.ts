@@ -4,7 +4,7 @@
  * `@writer = CacheWriter.new` makes it a `CacheWriter`. Before, no call on an
  * instance variable linked at all.
  *
- * Only `initialize` is read, and only a lone `Const.new(…)` types the
+ * For constructor inference, only `initialize` is read, and only a lone `Const.new(…)` types the
  * variable there: one assigned two classes, a conditional, a value passed
  * through `.tap`, or anything but `.new` leaves it untyped, and a class the
  * project doesn't declare (`Logger.new($stdout)`) links nothing. A class
@@ -90,6 +90,45 @@ module Mixin
   end
 end
 `,
+  'app/models/record.rb': `class ApplicationRecord
+end
+class Record < ApplicationRecord
+  def publish!
+  end
+end
+`,
+  'app/controllers/records_controller.rb': `class RecordsController < ApplicationController
+  before_action :load_record, except: [:create]
+
+  def publish
+    @record.publish!
+  end
+
+  def create
+    @record = current_user.records.build
+    @record.publish!
+  end
+
+  private
+
+  def load_record
+    @record = Record.where(account_id: current_account.id).find(params[:id])
+  end
+end
+`,
+  'app/controllers/other_records_controller.rb': `class OtherRecordsController < ApplicationController
+  before_action :load_record, only: [:publish]
+
+  def publish
+    @record = current_user.records.build
+    @record.publish!
+  end
+
+  def load_record
+    @record = Record.find(params[:id])
+  end
+end
+`,
 };
 
 let root = '';
@@ -163,5 +202,13 @@ describe.each(backends)('Ruby calls on an instance variable initialize types (%s
     const graph = await index(backend);
     expect(callsAt(graph, 'app/holder.rb', 32)).toEqual([]);
     expect(callsAt(graph, 'app/holder.rb', 38)).toEqual([]);
+  });
+
+  it.skipIf(skip)('links an applicable Rails callback without typing excluded actions or competing writes', async () => {
+    const graph = await index(backend);
+    const controller = 'app/controllers/records_controller.rb';
+    expect(callsAt(graph, controller, 5)).toEqual(['Record::publish!:4']);
+    expect(callsAt(graph, controller, 10)).toEqual([]);
+    expect(callsAt(graph, 'app/controllers/other_records_controller.rb', 6)).toEqual([]);
   });
 });
